@@ -84,11 +84,11 @@ label.t{display:flex;gap:6px;align-items:center;font-size:13px;color:var(--ink-2
 <script>
 const KC={calzada:'#5c6670',bulevar:'#7d6a9c',fraccionador:'#b98a2c',estatal:'#2a5e7c',rapida:'#a3382b',metro:'#c2185b'};
 const decadeColor=y=>y<1925?'#7d6a9c':y<1940?'#b98a2c':y<1955?'#2a5e7c':y<1970?'#a3382b':'#3f8a7a';
-const map=L.map('map',{preferCanvas:true,zoomControl:true}).setView([19.40,-99.14],11);
+const map=L.map('map',{preferCanvas:true,zoomControl:true,zoomAnimation:false}).setView([19.40,-99.14],11);
 map.createPane('plano').style.zIndex=350;map.createPane('mancha').style.zIndex=380;
 L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'© OpenStreetMap contributors',maxZoom:19,className:'base'}).addTo(map);
 const $=id=>document.getElementById(id);
-let cur=1930,playing=false,main=null,pol=null,mainData=null,mancha=null,manchaYears=[],plano=null,cols=[],colLayer=L.layerGroup();
+let cur=1930,playing=false,mancha=null,manchaYears=[],plano=null,cols=[],colLayer=L.layerGroup();
 const TC={lujo:'#7d6a9c',media:'#b98a2c',popular:'#a3382b',estatal:'#2a5e7c',industria:'#5c6670'};
 const TN={lujo:'fraccionamiento de lujo',media:'clase media',popular:'popular o irregular',estatal:'Estado',industria:'industria'};
 function fichaCol(c){const rs=roadsNear(c);
@@ -105,37 +105,65 @@ function updateCols(){if(!$('tgCol').checked){map.removeLayer(colLayer);return}c
 fetch('data/colonias.json').then(r=>r.json()).then(d=>{cols=d;updateCols()});
 $('tgCol').addEventListener('change',updateCols);
 fetch('data/plano_1911.json').then(r=>r.json()).then(m=>{plano=L.imageOverlay('data/plano_1911.webp',m.bounds,{opacity:.7,interactive:false,pane:'plano',attribution:'Plano 1911: David Rumsey Map Collection'});
-  const sync=()=>{if($('tgPlano').checked){plano.addTo(map);plano.setOpacity($('opPlano').value/100);if(main)main.bringToFront();if(pol)pol.bringToFront()}else map.removeLayer(plano)};
+  const sync=()=>{if($('tgPlano').checked){plano.addTo(map);plano.setOpacity($('opPlano').value/100)}else map.removeLayer(plano)};
   $('tgPlano').addEventListener('change',sync);$('opPlano').addEventListener('input',sync)});
 function lenKm(g){let s=0;const lines=g.type==='LineString'?[g.coordinates]:g.coordinates;for(const c of lines)for(let i=1;i<c.length;i++){const dx=(c[i][0]-c[i-1][0])*Math.cos(c[i][1]*Math.PI/180)*111.32,dy=(c[i][1]-c[i-1][1])*110.57;s+=Math.hypot(dx,dy)}return s}
-function styleMain(f){const p=f.properties;
-  if(!p.year){return $('tgSin').checked?{color:'#c9c4b8',weight:1,opacity:.7}:{opacity:0,weight:0}}
-  if(p.year>cur)return{opacity:0,weight:0};
-  const fresh=cur-p.year<3;return{color:KC[p.kind]||'#333',weight:fresh?4:2.2,opacity:fresh?1:.85}}
-function stylePol(f){const p=f.properties;if(!$('tgPol').checked||p.year>cur)return{opacity:0,weight:0};const fresh=cur-p.year<3;return{color:decadeColor(p.year),weight:fresh?3.5:1.6,opacity:fresh?1:.8}}
 function ficha(p,extra){$('ficha').innerHTML=`<span class="eyebrow">Ficha</span><h3>${p.name||'(sin nombre)'}</h3><span class="m">${p.year?('abre hacia '+p.year):'sin fechar'}${p.kind?' · '+p.kind:''}${p.seccion?' · '+p.seccion:''}</span>${p.who?`<span>${p.who}</span>`:''}${p.conf?`<span class="m conf-${p.conf}">confianza ${p.conf}</span>`:''}${extra||''}`}
-// restilado incremental: solo los tramos cuyo estado cambia con el año
-const byYear=new Map();let lastYear=null,cumKm=[],cumN=[];
-function reg(y,l){if(!y)return;if(!byYear.has(y))byYear.set(y,[]);byYear.get(y).push(l)}
-function restyleYear(y){const ls=byYear.get(y);if(!ls)return;for(const l of ls){l.setStyle(l._pol?stylePol(l.feature):styleMain(l.feature))}}
-function full(){if(main)main.setStyle(styleMain);if(pol)pol.setStyle(stylePol)}
+// ---- capa de calles en un solo lienzo (ligera para teléfonos) ----
+// cada calle: {p: props, lines: [Float64Array lon,lat,...], bbox, pol: bool}
+const ROADS=[];let cumKm=[],cumN=[];
+function ingest(d,isPol){for(const f of d.features){const g=f.geometry;const lines=(g.type==='LineString'?[g.coordinates]:g.coordinates).map(c=>{const a=new Float64Array(c.length*2);for(let i=0;i<c.length;i++){a[2*i]=c[i][0];a[2*i+1]=c[i][1]}return a});
+  let x0=1e9,y0=1e9,x1=-1e9,y1=-1e9;for(const a of lines)for(let i=0;i<a.length;i+=2){if(a[i]<x0)x0=a[i];if(a[i]>x1)x1=a[i];if(a[i+1]<y0)y0=a[i+1];if(a[i+1]>y1)y1=a[i+1]}
+  f.properties._km=lenKm(g);ROADS.push({p:f.properties,lines,bbox:[x0,y0,x1,y1],pol:isPol})}}
+function index(){cumKm=new Array(140).fill(0);cumN=new Array(140).fill(0);
+  for(const r of ROADS){if(r.pol)continue;const y=r.p.year;if(y){const i=Math.max(0,y-1900);cumKm[i]+=r.p._km;cumN[i]++}}
+  for(let i=1;i<140;i++){cumKm[i]+=cumKm[i-1];cumN[i]+=cumN[i-1]}}
+const RoadsLayer=L.Layer.extend({
+  onAdd(m){this._m=m;this._c=L.DomUtil.create('canvas','roads-canvas');this._c.style.position='absolute';this._c.style.pointerEvents='none';m.getPanes().overlayPane.appendChild(this._c);this._c.style.zIndex=390;
+    m.on('moveend zoomend resize',this.draw,this);m.on('zoomanim',this._anim,this);this.draw()},
+  onRemove(m){L.DomUtil.remove(this._c);m.off('moveend zoomend resize',this.draw,this);m.off('zoomanim',this._anim,this)},
+  _anim(e){const s=this._m.getZoomScale(e.zoom),off=this._m._latLngBoundsToNewLayerBounds(this._m.getBounds(),e.zoom,e.center).min;L.DomUtil.setTransform(this._c,off,s)},
+  draw(){const m=this._m,size=m.getSize(),dpr=Math.min(window.devicePixelRatio||1,2);const c=this._c;
+    if(c.width!==size.x*dpr||c.height!==size.y*dpr){c.width=size.x*dpr;c.height=size.y*dpr;c.style.width=size.x+'px';c.style.height=size.y+'px'}
+    L.DomUtil.setPosition(c,m.containerPointToLayerPoint([0,0]));
+    const ctx=c.getContext('2d');ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,size.x,size.y);ctx.lineCap='round';ctx.lineJoin='round';
+    const b=m.getBounds(),W=b.getWest()-.01,E=b.getEast()+.01,S=b.getSouth()-.01,N=b.getNorth()+.01,z=m.getZoom();
+    const showSin=$('tgSin').checked,showPol=$('tgPol').checked;
+    // proyección rápida: web mercator lineal en píxeles de contenedor
+    const o=m.getPixelOrigin(),sc=256*Math.pow(2,z)/360,lat2y=lat=>{const s=Math.sin(lat*Math.PI/180);return (0.5-Math.log((1+s)/(1-s))/(4*Math.PI))*256*Math.pow(2,z)},tl=m.containerPointToLayerPoint([0,0]);
+    const X=lon=>(lon+180)*sc-o.x-tl.x,Y=lat=>lat2y(lat)-o.y-tl.y;
+    const groups=[[],[],[],[]]; // sin fechar, polanco, fechadas, recientes
+    for(const r of ROADS){const bb=r.bbox;if(bb[2]<W||bb[0]>E||bb[3]<S||bb[1]>N)continue;const y=r.p.year;
+      if(r.pol){if(!showPol||!y||y>cur||z<13)continue;groups[1].push(r);continue}
+      if(!y){if(showSin&&z>=12)groups[0].push(r);continue}
+      if(y>cur)continue;groups[cur-y<3?3:2].push(r)}
+    const stroke=(r,col,w,al)=>{ctx.strokeStyle=col;ctx.lineWidth=w;ctx.globalAlpha=al;ctx.beginPath();for(const a of r.lines){ctx.moveTo(X(a[0]),Y(a[1]));for(let i=2;i<a.length;i+=2)ctx.lineTo(X(a[i]),Y(a[i+1]))}ctx.stroke()};
+    const k=z>=14?1.3:z>=12?1:.75;
+    for(const r of groups[0])stroke(r,'#c9c4b8',1*k,.7);
+    for(const r of groups[1])stroke(r,decadeColor(r.p.year),(cur-r.p.year<3?3.5:1.6)*k,cur-r.p.year<3?1:.8);
+    for(const r of groups[2])stroke(r,KC[r.p.kind]||'#333',2.2*k,.85);
+    for(const r of groups[3])stroke(r,KC[r.p.kind]||'#333',4*k,1);
+    ctx.globalAlpha=1;this._X=X;this._Y=Y}
+});
+const roads=new RoadsLayer();
+function pickRoad(latlng){if(!roads._X)return null;const m=map,pt=m.latLngToContainerPoint(latlng);let best=null,bd=10;const z=m.getZoom();const d=0.02;const lon=latlng.lng,lat=latlng.lat;
+  for(const r of ROADS){const bb=r.bbox;if(bb[2]<lon-d||bb[0]>lon+d||bb[3]<lat-d||bb[1]>lat+d)continue;const y=r.p.year;
+    if(r.pol){if(!$('tgPol').checked||!y||y>cur||z<13)continue}else if(!y){if(!$('tgSin').checked)continue}else if(y>cur)continue;
+    for(const a of r.lines){for(let i=2;i<a.length;i+=2){const x1=roads._X(a[i-2]),y1=roads._Y(a[i-1]),x2=roads._X(a[i]),y2=roads._Y(a[i+1]);const dx=x2-x1,dy=y2-y1,l2=dx*dx+dy*dy;let t=l2?((pt.x-x1)*dx+(pt.y-y1)*dy)/l2:0;t=Math.max(0,Math.min(1,t));const dd=Math.hypot(pt.x-(x1+t*dx),pt.y-(y1+t*dy));if(dd<bd){bd=dd;best=r}}}}
+  return best}
+map.on('click',e=>{const r=pickRoad(e.latlng);if(r)ficha(r.p)});
+function roadsNear(c){const seen=new Map();for(const r of ROADS){const p=r.p;if(r.pol||!p.year||seen.has(p.name))continue;const a=r.lines[0];const i=Math.floor(a.length/4)*2;const dx=(a[i]-c.lon)*105,dy=(a[i+1]-c.lat)*110.6;if(Math.hypot(dx,dy)<1)seen.set(p.name,{y:p.year,n:p.name})}return[...seen.values()].sort((a,b)=>a.y-b.y).slice(0,8)}
 function styleMancha(f){const y=f.properties.year;if(!$('tgMancha').checked)return{opacity:0,fillOpacity:0};
   const best=manchaYears.filter(v=>v<=cur).pop();if(y!==best)return{opacity:0,fillOpacity:0};
   return{color:'#b98a2c',weight:1,opacity:.6,fillColor:'#d9c27a',fillOpacity:.22,interactive:false}}
-function update(force){$('year').textContent=cur;$('slider').value=cur;if(mancha)mancha.setStyle(styleMancha);updateCols();
+let drawReq=null;
+function update(){$('year').textContent=cur;$('slider').value=cur;if(mancha)mancha.setStyle(styleMancha);updateCols();
   {const y=manchaYears.filter(v=>v<=cur).pop();$('manchaNote').textContent=y?('mancha urbana: límite de '+y+(y<1990?' (trazado sobre el plano de 1911, aprox.)':' (Atlas of Urban Expansion)')):'mancha urbana: sin polígono para este año'}
-  if(force||lastYear===null||Math.abs(cur-lastYear)>1)full();
-  else{ // cambio de un año: aparecen los de cur, pierden resalte los de cur-3; en reversa al revés
-    const d=cur-lastYear;restyleYear(cur);restyleYear(cur-3);if(d<0){restyleYear(lastYear);restyleYear(lastYear-3)}}
-  lastYear=cur;
+  if(roads._m&&!drawReq)drawReq=requestAnimationFrame(()=>{drawReq=null;roads.draw()});
   if(cumKm.length){$('km').textContent=Math.round(cumKm[cur-1900]).toLocaleString('es-MX');$('n').textContent=cumN[cur-1900]}}
-function index(d){cumKm=new Array(140).fill(0);cumN=new Array(140).fill(0);
-  for(const f of d.features){const p=f.properties;if(p.year){const i=Math.max(0,p.year-1900);cumKm[i]+=p._km;cumN[i]++}}
-  for(let i=1;i<140;i++){cumKm[i]+=cumKm[i-1];cumN[i]+=cumN[i-1]}}
-fetch('data/zm_main_roads.geojson').then(r=>r.json()).then(d=>{mainData=d;d.features.forEach(f=>f.properties._km=lenKm(f.geometry));index(d);
-  main=L.geoJSON(d,{style:styleMain,onEachFeature:(f,l)=>{reg(f.properties.year,l);l.on('click',()=>ficha(f.properties))}}).addTo(map);update(true)});
-fetch('data/mancha.geojson').then(r=>r.json()).then(d=>{manchaYears=d.features.map(f=>f.properties.year).sort();mancha=L.geoJSON(d,{style:styleMancha,interactive:false,pane:'mancha'}).addTo(map);if(main)main.bringToFront();if(pol)pol.bringToFront();update(true)});
-fetch('data/polanco_streets.geojson').then(r=>r.json()).then(d=>{pol=L.geoJSON(d,{style:stylePol,onEachFeature:(f,l)=>{l._pol=true;reg(f.properties.year,l);l.on('click',()=>ficha(f.properties))}}).addTo(map);update(true)});
+fetch('data/zm_main_roads.geojson').then(r=>r.json()).then(d=>{ingest(d,false);index();if(!roads._m)roads.addTo(map);update()});
+fetch('data/polanco_streets.geojson').then(r=>r.json()).then(d=>{ingest(d,true);if(!roads._m)roads.addTo(map);update()});
+fetch('data/mancha.geojson').then(r=>r.json()).then(d=>{manchaYears=d.features.map(f=>f.properties.year).sort();mancha=L.geoJSON(d,{style:styleMancha,interactive:false,pane:'mancha'}).addTo(map);update()});
 // reproductor
 let raf=null,acc=0,lastTs=0;
 function setPlaying(v){playing=v;$('play').setAttribute('aria-pressed',v);$('play').innerHTML=v?'&#10074;&#10074; Pausa':'&#9654; Reproducir';if(v){lastTs=performance.now();acc=0;raf=requestAnimationFrame(tick)}else if(raf){cancelAnimationFrame(raf);raf=null}}
@@ -149,7 +177,7 @@ $('slider').addEventListener('input',e=>{setPlaying(false);cur=+e.target.value;u
 document.addEventListener('keydown',e=>{if(e.target.tagName==='INPUT'||e.target.tagName==='SELECT')return;if(e.code==='Space'){e.preventDefault();$('play').click()}if(e.key==='ArrowLeft')$('back').click();if(e.key==='ArrowRight')$('fwd').click()});
 $('polanco').addEventListener('click',()=>map.flyTo([19.432,-99.197],15));
 $('general').addEventListener('click',()=>map.flyTo([19.40,-99.14],11));
-$('tgSin').addEventListener('change',()=>update(true));$('tgMancha').addEventListener('change',()=>update(true));$('tgPol').addEventListener('change',()=>update(true));
+$('tgSin').addEventListener('change',update);$('tgMancha').addEventListener('change',update);$('tgPol').addEventListener('change',update);
 </script>
 </body>
 </html>
