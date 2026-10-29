@@ -52,6 +52,7 @@ label.t{display:flex;gap:6px;align-items:center;font-size:13px;color:var(--ink-2
   </div>
   <div class="row"><button class="ghost" id="polanco">Enfocar Polanco</button><button class="ghost" id="general">Vista general</button></div>
   <div class="stat"><b id="km">0</b> km de vialidad principal abierta a este año · <span id="n">0</span> tramos</div>
+  <div class="stat" id="manchaNote"></div>
   <div class="legend">
     <span><i style="background:var(--calzada)"></i>calzada prehispánica</span>
     <span><i style="background:var(--bulevar)"></i>bulevar porfiriano</span>
@@ -59,11 +60,13 @@ label.t{display:flex;gap:6px;align-items:center;font-size:13px;color:var(--ink-2
     <span><i style="background:var(--estatal)"></i>abierta por el DDF o el Estado</span>
     <span><i style="background:var(--rapida)"></i>vía rápida o eje</span>
     <span><i style="background:var(--sin)"></i>sin fechar todavía (red actual)</span>
+    <span><i style="background:#d9c27a;height:10px;opacity:.6"></i>mancha urbana al año (desde 1990)</span>
   </div>
+  <label class="t"><input type="checkbox" id="tgMancha" checked> mancha urbana (1990, 2000, 2014)</label>
   <label class="t"><input type="checkbox" id="tgSin" checked> mostrar red actual sin fechar</label>
   <label class="t"><input type="checkbox" id="tgPol" checked> calles de Polanco (piloto)</label>
   <div class="ficha" id="ficha"><span class="eyebrow">Ficha</span><span class="note">Haz clic en una calle.</span></div>
-  <p class="note">Geometría real de OpenStreetMap (ODbL). Fechas de apertura asignadas por nombre y tramo a partir de fuentes publicadas; cada tramo lleva su nivel de confianza. Polanco está fechado por secciones de fraccionamiento, pendiente de verificar contra los planos de 1929, 1941 y 1952. Mapa base de OpenStreetMap.</p>
+  <p class="note">Geometría real de OpenStreetMap (ODbL). Fechas de apertura asignadas por nombre y tramo a partir de fuentes publicadas; cada tramo lleva su nivel de confianza. Polanco está fechado por secciones de fraccionamiento, pendiente de verificar contra los planos de 1929, 1941 y 1952. Mancha urbana de 1990, 2000 y 2014 del Atlas of Urban Expansion (NYU, Lincoln Institute, UN-Habitat). Mapa base de OpenStreetMap.</p>
 </aside>
 <div id="map"></div>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -72,7 +75,7 @@ const KC={calzada:'#5c6670',bulevar:'#7d6a9c',fraccionador:'#b98a2c',estatal:'#2
 const decadeColor=y=>y<1925?'#7d6a9c':y<1940?'#b98a2c':y<1955?'#2a5e7c':y<1970?'#a3382b':'#3f8a7a';
 const map=L.map('map',{preferCanvas:true,zoomControl:true}).setView([19.40,-99.14],11);
 L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'© OpenStreetMap contributors',maxZoom:19,className:'base'}).addTo(map);
-let cur=1930,playing=false,main=null,pol=null,mainData=null;
+let cur=1930,playing=false,main=null,pol=null,mainData=null,mancha=null,manchaYears=[];
 const $=id=>document.getElementById(id);
 function lenKm(g){let s=0;const lines=g.type==='LineString'?[g.coordinates]:g.coordinates;for(const c of lines)for(let i=1;i<c.length;i++){const dx=(c[i][0]-c[i-1][0])*Math.cos(c[i][1]*Math.PI/180)*111.32,dy=(c[i][1]-c[i-1][1])*110.57;s+=Math.hypot(dx,dy)}return s}
 function styleMain(f){const p=f.properties;
@@ -86,7 +89,11 @@ const byYear=new Map();let lastYear=null,cumKm=[],cumN=[];
 function reg(y,l){if(!y)return;if(!byYear.has(y))byYear.set(y,[]);byYear.get(y).push(l)}
 function restyleYear(y){const ls=byYear.get(y);if(!ls)return;for(const l of ls){l.setStyle(l._pol?stylePol(l.feature):styleMain(l.feature))}}
 function full(){if(main)main.setStyle(styleMain);if(pol)pol.setStyle(stylePol)}
-function update(force){$('year').textContent=cur;$('slider').value=cur;
+function styleMancha(f){const y=f.properties.year;if(!$('tgMancha').checked)return{opacity:0,fillOpacity:0};
+  const best=manchaYears.filter(v=>v<=cur).pop();if(y!==best)return{opacity:0,fillOpacity:0};
+  return{color:'#b98a2c',weight:1,opacity:.6,fillColor:'#d9c27a',fillOpacity:.22,interactive:false}}
+function update(force){$('year').textContent=cur;$('slider').value=cur;if(mancha)mancha.setStyle(styleMancha);
+  $('manchaNote').textContent=cur<1990?'mancha urbana: sin polígono antes de 1990 (pendiente)':'mancha urbana: límite de '+manchaYears.filter(v=>v<=cur).pop()+' (Atlas of Urban Expansion)';
   if(force||lastYear===null||Math.abs(cur-lastYear)>1)full();
   else{ // cambio de un año: aparecen los de cur, pierden resalte los de cur-3; en reversa al revés
     const d=cur-lastYear;restyleYear(cur);restyleYear(cur-3);if(d<0){restyleYear(lastYear);restyleYear(lastYear-3)}}
@@ -97,6 +104,7 @@ function index(d){cumKm=new Array(140).fill(0);cumN=new Array(140).fill(0);
   for(let i=1;i<140;i++){cumKm[i]+=cumKm[i-1];cumN[i]+=cumN[i-1]}}
 fetch('data/zm_main_roads.geojson').then(r=>r.json()).then(d=>{mainData=d;d.features.forEach(f=>f.properties._km=lenKm(f.geometry));index(d);
   main=L.geoJSON(d,{style:styleMain,onEachFeature:(f,l)=>{reg(f.properties.year,l);l.on('click',()=>ficha(f.properties))}}).addTo(map);update(true)});
+fetch('data/mancha.geojson').then(r=>r.json()).then(d=>{manchaYears=d.features.map(f=>f.properties.year).sort();mancha=L.geoJSON(d,{style:styleMancha,interactive:false}).addTo(map);if(main)main.bringToFront();if(pol)pol.bringToFront();update(true)});
 fetch('data/polanco_streets.geojson').then(r=>r.json()).then(d=>{pol=L.geoJSON(d,{style:stylePol,onEachFeature:(f,l)=>{l._pol=true;reg(f.properties.year,l);l.on('click',()=>ficha(f.properties))}}).addTo(map);update(true)});
 // reproductor
 let raf=null,acc=0,lastTs=0;
@@ -111,7 +119,7 @@ $('slider').addEventListener('input',e=>{setPlaying(false);cur=+e.target.value;u
 document.addEventListener('keydown',e=>{if(e.target.tagName==='INPUT'||e.target.tagName==='SELECT')return;if(e.code==='Space'){e.preventDefault();$('play').click()}if(e.key==='ArrowLeft')$('back').click();if(e.key==='ArrowRight')$('fwd').click()});
 $('polanco').addEventListener('click',()=>map.flyTo([19.432,-99.197],15));
 $('general').addEventListener('click',()=>map.flyTo([19.40,-99.14],11));
-$('tgSin').addEventListener('change',()=>update(true));$('tgPol').addEventListener('change',()=>update(true));
+$('tgSin').addEventListener('change',()=>update(true));$('tgMancha').addEventListener('change',()=>update(true));$('tgPol').addEventListener('change',()=>update(true));
 </script>
 </body>
 </html>
