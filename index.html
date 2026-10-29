@@ -21,6 +21,8 @@ input[type=range]{width:100%;accent-color:var(--tez)}
 .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 button{font:inherit;font-size:13px;font-weight:500;padding:7px 12px;border:1px solid var(--ink);background:var(--ink);color:var(--bg);cursor:pointer}
 button.ghost{background:var(--paper);color:var(--ink);border-color:var(--line)}
+button[aria-pressed="true"]{background:var(--tez);border-color:var(--tez)}
+select{font:inherit;font-size:13px;padding:6px 8px;border:1px solid var(--line);background:var(--paper);color:var(--ink)}
 .stat{font-family:var(--mono);font-size:13px;color:var(--ink-2)}
 .stat b{color:var(--ink);font-weight:500}
 .legend{display:grid;gap:5px;font-size:13px}
@@ -42,7 +44,13 @@ label.t{display:flex;gap:6px;align-items:center;font-size:13px;color:var(--ink-2
   <div><p class="eyebrow">Atlas histórico · prototipo</p><h1>Ciudad de México, 1911 a 2026</h1></div>
   <div class="year" id="year">1930</div>
   <input type="range" id="slider" min="1910" max="2026" value="1930" step="1" aria-label="Año">
-  <div class="row"><button id="play">Reproducir</button><button class="ghost" id="polanco">Enfocar Polanco</button><button class="ghost" id="general">Vista general</button></div>
+  <div class="row">
+    <button class="ghost" id="back" title="Un año atrás">&#8249;</button>
+    <button id="play" aria-pressed="false">&#9654; Reproducir</button>
+    <button class="ghost" id="fwd" title="Un año adelante">&#8250;</button>
+    <select id="speed" aria-label="Velocidad"><option value="700">lento</option><option value="350" selected>normal</option><option value="150">rápido</option></select>
+  </div>
+  <div class="row"><button class="ghost" id="polanco">Enfocar Polanco</button><button class="ghost" id="general">Vista general</button></div>
   <div class="stat"><b id="km">0</b> km de vialidad principal abierta a este año · <span id="n">0</span> tramos</div>
   <div class="legend">
     <span><i style="background:var(--calzada)"></i>calzada prehispánica</span>
@@ -73,18 +81,37 @@ function styleMain(f){const p=f.properties;
   const fresh=cur-p.year<3;return{color:KC[p.kind]||'#333',weight:fresh?4:2.2,opacity:fresh?1:.85}}
 function stylePol(f){const p=f.properties;if(!$('tgPol').checked||p.year>cur)return{opacity:0,weight:0};const fresh=cur-p.year<3;return{color:decadeColor(p.year),weight:fresh?3.5:1.6,opacity:fresh?1:.8}}
 function ficha(p,extra){$('ficha').innerHTML=`<span class="eyebrow">Ficha</span><h3>${p.name||'(sin nombre)'}</h3><span class="m">${p.year?('abre hacia '+p.year):'sin fechar'}${p.kind?' · '+p.kind:''}${p.seccion?' · '+p.seccion:''}</span>${p.who?`<span>${p.who}</span>`:''}${p.conf?`<span class="m conf-${p.conf}">confianza ${p.conf}</span>`:''}${extra||''}`}
-function update(){$('year').textContent=cur;$('slider').value=cur;
-  if(main)main.setStyle(styleMain);if(pol)pol.setStyle(stylePol);
-  if(mainData){let km=0,n=0;for(const f of mainData.features){const p=f.properties;if(p.year&&p.year<=cur){km+=p._km;n++}}$('km').textContent=Math.round(km).toLocaleString('es-MX');$('n').textContent=n}}
-fetch('data/zm_main_roads.geojson').then(r=>r.json()).then(d=>{mainData=d;d.features.forEach(f=>f.properties._km=lenKm(f.geometry));
-  main=L.geoJSON(d,{style:styleMain,onEachFeature:(f,l)=>l.on('click',()=>ficha(f.properties))}).addTo(map);update()});
-fetch('data/polanco_streets.geojson').then(r=>r.json()).then(d=>{pol=L.geoJSON(d,{style:stylePol,onEachFeature:(f,l)=>l.on('click',()=>ficha(f.properties))}).addTo(map);update()});
-$('slider').addEventListener('input',e=>{cur=+e.target.value;playing=false;$('play').textContent='Reproducir';update()});
-let t=null;$('play').addEventListener('click',()=>{if(playing){playing=false;clearInterval(t);$('play').textContent='Reproducir';return}
-  if(cur>=2026)cur=1910;playing=true;$('play').textContent='Pausa';t=setInterval(()=>{cur++;if(cur>=2026){cur=2026;playing=false;clearInterval(t);$('play').textContent='Reproducir'}update()},350)});
+// restilado incremental: solo los tramos cuyo estado cambia con el año
+const byYear=new Map();let lastYear=null,cumKm=[],cumN=[];
+function reg(y,l){if(!y)return;if(!byYear.has(y))byYear.set(y,[]);byYear.get(y).push(l)}
+function restyleYear(y){const ls=byYear.get(y);if(!ls)return;for(const l of ls){l.setStyle(l._pol?stylePol(l.feature):styleMain(l.feature))}}
+function full(){if(main)main.setStyle(styleMain);if(pol)pol.setStyle(stylePol)}
+function update(force){$('year').textContent=cur;$('slider').value=cur;
+  if(force||lastYear===null||Math.abs(cur-lastYear)>1)full();
+  else{ // cambio de un año: aparecen los de cur, pierden resalte los de cur-3; en reversa al revés
+    const d=cur-lastYear;restyleYear(cur);restyleYear(cur-3);if(d<0){restyleYear(lastYear);restyleYear(lastYear-3)}}
+  lastYear=cur;
+  if(cumKm.length){$('km').textContent=Math.round(cumKm[cur-1900]).toLocaleString('es-MX');$('n').textContent=cumN[cur-1900]}}
+function index(d){cumKm=new Array(140).fill(0);cumN=new Array(140).fill(0);
+  for(const f of d.features){const p=f.properties;if(p.year){const i=Math.max(0,p.year-1900);cumKm[i]+=p._km;cumN[i]++}}
+  for(let i=1;i<140;i++){cumKm[i]+=cumKm[i-1];cumN[i]+=cumN[i-1]}}
+fetch('data/zm_main_roads.geojson').then(r=>r.json()).then(d=>{mainData=d;d.features.forEach(f=>f.properties._km=lenKm(f.geometry));index(d);
+  main=L.geoJSON(d,{style:styleMain,onEachFeature:(f,l)=>{reg(f.properties.year,l);l.on('click',()=>ficha(f.properties))}}).addTo(map);update(true)});
+fetch('data/polanco_streets.geojson').then(r=>r.json()).then(d=>{pol=L.geoJSON(d,{style:stylePol,onEachFeature:(f,l)=>{l._pol=true;reg(f.properties.year,l);l.on('click',()=>ficha(f.properties))}}).addTo(map);update(true)});
+// reproductor
+let raf=null,acc=0,lastTs=0;
+function setPlaying(v){playing=v;$('play').setAttribute('aria-pressed',v);$('play').innerHTML=v?'&#10074;&#10074; Pausa':'&#9654; Reproducir';if(v){lastTs=performance.now();acc=0;raf=requestAnimationFrame(tick)}else if(raf){cancelAnimationFrame(raf);raf=null}}
+function tick(ts){if(!playing)return;acc+=ts-lastTs;lastTs=ts;const per=+$('speed').value;
+  if(acc>=per){acc-=per;cur++;if(cur>=2026){cur=2026;update();setPlaying(false);return}update()}
+  raf=requestAnimationFrame(tick)}
+$('play').addEventListener('click',()=>{if(playing){setPlaying(false);return}if(cur>=2026)cur=1910;update();setPlaying(true)});
+$('back').addEventListener('click',()=>{setPlaying(false);cur=Math.max(1910,cur-1);update()});
+$('fwd').addEventListener('click',()=>{setPlaying(false);cur=Math.min(2026,cur+1);update()});
+$('slider').addEventListener('input',e=>{setPlaying(false);cur=+e.target.value;update()});
+document.addEventListener('keydown',e=>{if(e.target.tagName==='INPUT'||e.target.tagName==='SELECT')return;if(e.code==='Space'){e.preventDefault();$('play').click()}if(e.key==='ArrowLeft')$('back').click();if(e.key==='ArrowRight')$('fwd').click()});
 $('polanco').addEventListener('click',()=>map.flyTo([19.432,-99.197],15));
 $('general').addEventListener('click',()=>map.flyTo([19.40,-99.14],11));
-$('tgSin').addEventListener('change',update);$('tgPol').addEventListener('change',update);
+$('tgSin').addEventListener('change',()=>update(true));$('tgPol').addEventListener('change',()=>update(true));
 </script>
 </body>
 </html>
