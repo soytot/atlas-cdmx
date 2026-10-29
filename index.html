@@ -68,11 +68,11 @@ label.t{display:flex;gap:6px;align-items:center;font-size:13px;color:var(--ink-2
     <span><i style="background:var(--estatal)"></i>abierta por el DDF o el Estado</span>
     <span><i style="background:var(--rapida)"></i>vía rápida o eje</span>
     <span><i style="background:var(--sin)"></i>sin fechar todavía (red actual)</span>
-    <span><i style="background:#d9c27a;height:10px;opacity:.6"></i>mancha urbana al año (desde 1990)</span>
+    <span><i style="background:#d9c27a;height:10px;opacity:.6"></i>mancha urbana al año (1911, 1990, 2000, 2014)</span>
     <span><i style="width:12px;height:12px;border-radius:50%;background:#7d6a9c"></i>colonia: lujo <i style="width:12px;height:12px;border-radius:50%;background:#b98a2c"></i> clase media <i style="width:12px;height:12px;border-radius:50%;background:#a3382b"></i> popular <i style="width:12px;height:12px;border-radius:50%;background:#2a5e7c"></i> Estado <i style="width:12px;height:12px;border-radius:50%;background:#5c6670"></i> industria</span>
   </div>
   <label class="t"><input type="checkbox" id="tgPlano"> plano de 1911 (Compañía Litográfica) <input type="range" id="opPlano" min="0" max="100" value="70" style="width:70px" aria-label="Opacidad del plano"></label>
-  <label class="t"><input type="checkbox" id="tgMancha" checked> mancha urbana (1990, 2000, 2014)</label>
+  <label class="t"><input type="checkbox" id="tgMancha" checked> mancha urbana (1911, 1990, 2000, 2014)</label>
   <label class="t"><input type="checkbox" id="tgSin" checked> mostrar red actual sin fechar</label>
   <label class="t"><input type="checkbox" id="tgPol" checked> calles de Polanco (piloto)</label>
   <label class="t"><input type="checkbox" id="tgCol" checked> colonias con historia (puntos)</label>
@@ -85,6 +85,7 @@ label.t{display:flex;gap:6px;align-items:center;font-size:13px;color:var(--ink-2
 const KC={calzada:'#5c6670',bulevar:'#7d6a9c',fraccionador:'#b98a2c',estatal:'#2a5e7c',rapida:'#a3382b',metro:'#c2185b'};
 const decadeColor=y=>y<1925?'#7d6a9c':y<1940?'#b98a2c':y<1955?'#2a5e7c':y<1970?'#a3382b':'#3f8a7a';
 const map=L.map('map',{preferCanvas:true,zoomControl:true}).setView([19.40,-99.14],11);
+map.createPane('plano').style.zIndex=350;map.createPane('mancha').style.zIndex=380;
 L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'© OpenStreetMap contributors',maxZoom:19,className:'base'}).addTo(map);
 const $=id=>document.getElementById(id);
 let cur=1930,playing=false,main=null,pol=null,mainData=null,mancha=null,manchaYears=[],plano=null,cols=[],colLayer=L.layerGroup();
@@ -103,7 +104,7 @@ function updateCols(){if(!$('tgCol').checked){map.removeLayer(colLayer);return}c
     if(c._m){const el=c._m.getElement();if(el){const dv=el.querySelector('div');dv.classList.toggle('fresh',fresh)}}})}
 fetch('data/colonias.json').then(r=>r.json()).then(d=>{cols=d;updateCols()});
 $('tgCol').addEventListener('change',updateCols);
-fetch('data/plano_1911.json').then(r=>r.json()).then(m=>{plano=L.imageOverlay('data/plano_1911.webp',m.bounds,{opacity:.7,interactive:false,attribution:'Plano 1911: David Rumsey Map Collection'});
+fetch('data/plano_1911.json').then(r=>r.json()).then(m=>{plano=L.imageOverlay('data/plano_1911.webp',m.bounds,{opacity:.7,interactive:false,pane:'plano',attribution:'Plano 1911: David Rumsey Map Collection'});
   const sync=()=>{if($('tgPlano').checked){plano.addTo(map);plano.setOpacity($('opPlano').value/100);if(main)main.bringToFront();if(pol)pol.bringToFront()}else map.removeLayer(plano)};
   $('tgPlano').addEventListener('change',sync);$('opPlano').addEventListener('input',sync)});
 function lenKm(g){let s=0;const lines=g.type==='LineString'?[g.coordinates]:g.coordinates;for(const c of lines)for(let i=1;i<c.length;i++){const dx=(c[i][0]-c[i-1][0])*Math.cos(c[i][1]*Math.PI/180)*111.32,dy=(c[i][1]-c[i-1][1])*110.57;s+=Math.hypot(dx,dy)}return s}
@@ -122,7 +123,7 @@ function styleMancha(f){const y=f.properties.year;if(!$('tgMancha').checked)retu
   const best=manchaYears.filter(v=>v<=cur).pop();if(y!==best)return{opacity:0,fillOpacity:0};
   return{color:'#b98a2c',weight:1,opacity:.6,fillColor:'#d9c27a',fillOpacity:.22,interactive:false}}
 function update(force){$('year').textContent=cur;$('slider').value=cur;if(mancha)mancha.setStyle(styleMancha);updateCols();
-  $('manchaNote').textContent=cur<1990?'mancha urbana: sin polígono antes de 1990 (pendiente)':'mancha urbana: límite de '+manchaYears.filter(v=>v<=cur).pop()+' (Atlas of Urban Expansion)';
+  {const y=manchaYears.filter(v=>v<=cur).pop();$('manchaNote').textContent=y?('mancha urbana: límite de '+y+(y<1990?' (trazado sobre el plano de 1911, aprox.)':' (Atlas of Urban Expansion)')):'mancha urbana: sin polígono para este año'}
   if(force||lastYear===null||Math.abs(cur-lastYear)>1)full();
   else{ // cambio de un año: aparecen los de cur, pierden resalte los de cur-3; en reversa al revés
     const d=cur-lastYear;restyleYear(cur);restyleYear(cur-3);if(d<0){restyleYear(lastYear);restyleYear(lastYear-3)}}
@@ -133,7 +134,7 @@ function index(d){cumKm=new Array(140).fill(0);cumN=new Array(140).fill(0);
   for(let i=1;i<140;i++){cumKm[i]+=cumKm[i-1];cumN[i]+=cumN[i-1]}}
 fetch('data/zm_main_roads.geojson').then(r=>r.json()).then(d=>{mainData=d;d.features.forEach(f=>f.properties._km=lenKm(f.geometry));index(d);
   main=L.geoJSON(d,{style:styleMain,onEachFeature:(f,l)=>{reg(f.properties.year,l);l.on('click',()=>ficha(f.properties))}}).addTo(map);update(true)});
-fetch('data/mancha.geojson').then(r=>r.json()).then(d=>{manchaYears=d.features.map(f=>f.properties.year).sort();mancha=L.geoJSON(d,{style:styleMancha,interactive:false}).addTo(map);if(main)main.bringToFront();if(pol)pol.bringToFront();update(true)});
+fetch('data/mancha.geojson').then(r=>r.json()).then(d=>{manchaYears=d.features.map(f=>f.properties.year).sort();mancha=L.geoJSON(d,{style:styleMancha,interactive:false,pane:'mancha'}).addTo(map);if(main)main.bringToFront();if(pol)pol.bringToFront();update(true)});
 fetch('data/polanco_streets.geojson').then(r=>r.json()).then(d=>{pol=L.geoJSON(d,{style:stylePol,onEachFeature:(f,l)=>{l._pol=true;reg(f.properties.year,l);l.on('click',()=>ficha(f.properties))}}).addTo(map);update(true)});
 // reproductor
 let raf=null,acc=0,lastTs=0;
